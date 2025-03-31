@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <windowclass name="GenericCSVImport">
+        <frame>utilitybox</frame>
+        <sizelimits>
+            <minimum width="400" height="250" />
+            <dynamic />
+        </sizelimits>
+        <sheetdata>
+            <windowtitlebar_utilitybox name="title" />
+            <windowmenubar_utilitybox name="menubar" />
+            <resize_utilitybox />
+            <anchor_content_utilitybox_top />
+            <anchor_content_utilitybox_bottom />
+            <stringc_content_framed_groupbox_top name="instructions">
+                <static>Usage: Open the window where the text will be imported. In the formatted text field, add a line with "#table#" as the only text on the line. Click the Import CSV button below and select your CSV file.
+                </static>
+                <readonly />
+                <nodrag />
+            </stringc_content_framed_groupbox_top>
+            <button_text_content_center_bottom name="csvimport">
+                <text>Import CSV</text>
+                <script>
+                    function onButtonPress()
+                        Interface.dialogFileOpen(GenericCSVImportManager.onCSVFileSelection, { csv = "CSV Files" });
+                    end
+                </script>
+            </button_text_content_center_bottom>
+        </sheetdata>
+    </windowclass>
+</root>

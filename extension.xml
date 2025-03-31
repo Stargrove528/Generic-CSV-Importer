@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root version="3.0">
+    <announcement>
+        <text>Generic CSV Import v1.00\rCreated by Stargrove</text>
+        <font>emotefont</font>
+        <icon>CSV_Logo</icon>
+    </announcement>
+    <properties>
+        <name>Feature: Generic CSV Import</name>
+        <version>1.00</version>
+        <author>Stargrove</author>
+        <description>Import a CSV file to create a table in a text field where you place #table#.
+        </description>
+    </properties>
+    <base>
+        <includefile source="GenericCSVImport.xml" />
+        <script name="GenericCSVImportManager" file="GenericCSVImportManager.lua" />
+        <icon name="csv_button" file="gcsv_button.png" />
+        <icon name="CSV_Logo" file="gCSV_30x.png" />
+        <string name="sidebar_tooltip_csv2table">CSV Table Importer</string>
+        <string name="GenericCSVImport_window_title">Import CSV Table</string>
+    </base>
+</root>
