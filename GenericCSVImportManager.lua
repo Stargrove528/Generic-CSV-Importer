@@ -1,3 +1,7 @@
+
+-- Please see the LICENSE.md file included with this distribution for
+-- attribution and copyright information.
+
 ------------------------------------------------------------------
 -- Author: Stargrove
 -- Purpose: Replace the #table# placeholder with the text in your CSV
@@ -168,6 +172,9 @@ end
 --  csvText - The raw CSV text.
 ------------------------------------------------------------------
 function onImportCSV(csvText)
+    -- Run the scan again before importing to get the latest #table# field
+    fullDatabaseScan()
+
     if not cFormattedText then
         ChatManager.SystemMessage("No #table# placeholder found in the current window.")
         return
@@ -189,6 +196,15 @@ end
 ------------------------------------------------------------------
 function onCSVFileSelection(result, sPath)
     if result ~= "ok" then return end
+
+    -- Force-commit UI edits
+    --if WindowManager.getFocus() then
+    --    WindowManager.clearFocus()
+    --end
+
+    -- Perform full DB scan to find the latest #table#
+    ChatManager.SystemMessage("Debug: Scanning database before import...")
+    fullDatabaseScan()
 
     local sContents = File.openTextFile(sPath)
     if not sContents then
