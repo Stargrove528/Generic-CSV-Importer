@@ -1,7 +1,3 @@
-
--- Please see the LICENSE.md file included with this distribution for
--- attribution and copyright information.
-
 ------------------------------------------------------------------
 -- Author: Stargrove
 -- Purpose: Replace the #table# placeholder with the text in your CSV
@@ -140,29 +136,70 @@ local function createTableFromCSV(csvText)
 end
 
 ------------------------------------------------------------------
--- Function: escapeXML
--- Purpose: Escapes special characters in text to ensure compatibility 
---          with XML and HTML formats. This prevents parsing errors.
--- Parameters:
---  value - The input string to be escaped.
--- Returns:
---  The escaped string, safe for XML and HTML usage.
+-- Robust XML escaper for Fantasy Grounds formattedtext.
+-- Normalizes common Unicode/legacy/mojibake chars to numeric entities,
+-- then escapes XML-reserved chars, avoiding double-escape via a sentinel.
 ------------------------------------------------------------------
 local function escapeXML(value)
-    if not value then return "" end -- Handle nil or empty input gracefully
+    if not value then return "" end
+    local SENT = "\1"  -- sentinel to protect entities we create
 
-    -- Replace special characters with their XML/HTML-safe equivalents
-    value = string.gsub(value, "&", "&#38;")  -- Escape ampersand (&)
-    value = string.gsub(value, "<", "&lt;")  -- Escape less-than (<)
-    value = string.gsub(value, ">", "&gt;")  -- Escape greater-than (>)
-    value = string.gsub(value, "\"", "&quot;") -- Escape double quote (")
-    value = string.gsub(value, "'", "&apos;") -- Escape single quote (')
-    value = string.gsub(value, "%%", "&#37;")  -- Escape percent sign (%)
-    value = string.gsub(value, "%+", "&#43;")  -- Escape plus sign (+)
+    -- 0) Normalize BEFORE escaping '&'
+    -- Bullets
+    value = value
+        :gsub("\226\128\162", SENT .. "#8226;")                  -- UTF-8 bullet (•)
+        :gsub("â€¢",          SENT .. "#8226;")                  -- mojibake bullet
+        :gsub("\149",         SENT .. "#8226;")                  -- CP1252 bullet
+        :gsub("\194\183",     SENT .. "#8226;")                  -- UTF-8 middle dot → bullet (optional)
+        :gsub("\183",         SENT .. "#8226;")                  -- CP1252 middle dot → bullet (optional)
+
+    -- Smart apostrophes / single quotes
+    value = value
+        :gsub("\226\128\153", SENT .. "#8217;")                  -- UTF-8 ’ (U+2019)
+        :gsub("\226\128\152", SENT .. "#8216;")                  -- UTF-8 ‘ (U+2018)
+        :gsub("â€™",          SENT .. "#8217;")                  -- mojibake ’
+        :gsub("â€˜",          SENT .. "#8216;")                  -- mojibake ‘
+        :gsub("\146",         SENT .. "#8217;")                  -- CP1252 ’
+        :gsub("\145",         SENT .. "#8216;")                  -- CP1252 ‘
+
+    -- En dash / Em dash
+    value = value
+        :gsub("\226\128\147", SENT .. "#8211;")                  -- UTF-8 – (U+2013)
+        :gsub("\226\128\148", SENT .. "#8212;")                  -- UTF-8 — (U+2014)
+        :gsub("â€“",          SENT .. "#8211;")                  -- mojibake –
+        :gsub("â€”",          SENT .. "#8212;")                  -- mojibake —
+        :gsub("\150",         SENT .. "#8211;")                  -- CP1252 –
+        :gsub("\151",         SENT .. "#8212;")                  -- CP1252 —
+
+        -- Double quotes “ ” (U+201C/U+201D)
+    value = value
+        :gsub("\226\128\156", SENT .. "#8220;")   -- UTF-8 “
+        :gsub("\226\128\157", SENT .. "#8221;")   -- UTF-8 ”
+        :gsub("â€œ",          SENT .. "#8220;")   -- mojibake “
+        :gsub("â€\157",       SENT .. "#8221;")   -- mojibake ”
+        :gsub("\147",         SENT .. "#8220;")   -- CP1252 “
+        :gsub("\148",         SENT .. "#8221;")   -- CP1252 ”
+
+    -- (Optional niceties you can uncomment if helpful)
+    -- Ellipsis …
+    -- value = value:gsub("\226\128\166", SENT .. "#8230;"):gsub("â€¦", SENT .. "#8230;"):gsub("\133", SENT .. "#8230;")
+    -- Non-breaking space → regular space
+    -- value = value:gsub("\194\160", " "):gsub("\160", " ")
+
+    -- 1) Escape XML-reserved characters
+    value = value:gsub("&", "&#38;")
+                 :gsub("<", "&lt;")
+                 :gsub(">", "&gt;")
+                 :gsub('"', "&quot;")
+                 :gsub("'", "&apos;")
+                 :gsub("%%", "&#37;")
+                 :gsub("%+", "&#43;")
+
+    -- 2) Restore our protected numeric entities (=> &#NNNN;)
+    value = value:gsub(SENT .. "(#%d+;)", "&%1")
 
     return value
 end
-
 
 ------------------------------------------------------------------
 -- Function: onImportCSV
@@ -172,9 +209,6 @@ end
 --  csvText - The raw CSV text.
 ------------------------------------------------------------------
 function onImportCSV(csvText)
-    -- Run the scan again before importing to get the latest #table# field
-    fullDatabaseScan()
-
     if not cFormattedText then
         ChatManager.SystemMessage("No #table# placeholder found in the current window.")
         return
@@ -196,15 +230,6 @@ end
 ------------------------------------------------------------------
 function onCSVFileSelection(result, sPath)
     if result ~= "ok" then return end
-
-    -- Force-commit UI edits
-    --if WindowManager.getFocus() then
-    --    WindowManager.clearFocus()
-    --end
-
-    -- Perform full DB scan to find the latest #table#
-    ChatManager.SystemMessage("Debug: Scanning database before import...")
-    fullDatabaseScan()
 
     local sContents = File.openTextFile(sPath)
     if not sContents then
