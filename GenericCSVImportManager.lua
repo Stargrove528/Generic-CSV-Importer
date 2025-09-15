@@ -2,14 +2,22 @@
 -- Author: Stargrove
 -- Purpose: Replace the #table# placeholder with the text in your CSV
 --          file in text fields with a formatted HTML table.
+-- Notes:
+--   * escapeXML handles bullets/quotes/dashes (incl. Excel mojibake).
+--   * Placeholder match is tolerant: <p ...>#table#</p> (+ whitespace/NBSP).
+--   * Replacement success is verified before announcing "imported".
 ------------------------------------------------------------------
 
 -- Global variable to store the last formatted text field/control
 local cFormattedText = nil
 
+-- Tolerant pattern for the #table# paragraph (case-insensitive <p>, attrs allowed,
+-- spaces or NBSP around #table# allowed)
+local PLACEHOLDER_PATTERN = "<[Pp][^>]*>%s*#table#%s*</[Pp]>"
+
 ------------------------------------------------------------------
 -- Function: onTabletopInit
--- Purpose: Initializes the sidebar button and starts a full database scan.
+-- Purpose : Initializes the sidebar button and starts a full database scan.
 ------------------------------------------------------------------
 function onTabletopInit()
     local tButton = {
@@ -30,12 +38,11 @@ end
 
 ------------------------------------------------------------------
 -- Function: fullDatabaseScan
--- Purpose: Recursively scans the entire `db.xml` structure and replaces #table#.
+-- Purpose : Recursively scans the entire db.xml structure and finds #table#.
 ------------------------------------------------------------------
 function fullDatabaseScan()
     local rootNode = DB.getRoot()
     if rootNode then
-        --ChatManager.SystemMessage("Debug: Starting full database scan from root.")
         if searchAndReplaceTablePlaceholder(rootNode) then
             ChatManager.SystemMessage("Debug: #table# placeholder(s) found in database.")
         else
@@ -48,83 +55,51 @@ end
 
 ------------------------------------------------------------------
 -- Function: onWindowOpen
--- Purpose: Calls a full database scan every time a new window is opened.
+-- Purpose : Calls a full database scan every time a new window is opened.
 ------------------------------------------------------------------
 function onWindowOpen(w)
     local wClass = w.getClass()
     ChatManager.SystemMessage("Debug: Window opened - " .. wClass .. ", rescanning database...")
-    fullDatabaseScan() -- Rescan every time a new window is opened
+    fullDatabaseScan()
 end
 
 ------------------------------------------------------------------
 -- Function: searchAndReplaceTablePlaceholder
--- Purpose: Recursively searches for #table# placeholders in all formattedtext fields.
+-- Purpose : Recursively searches for #table# placeholders in all formattedtext fields.
+-- Notes   : Uses tolerant pattern so <p ...>#table#</p> is matched.
 ------------------------------------------------------------------
 function searchAndReplaceTablePlaceholder(node, depth)
     depth = depth or 0
-    local indent = string.rep("  ", depth)
 
-    -- ChatManager.SystemMessage(indent .. "Debug: Searching in node -> " .. node.getName() .. " (type: " .. node.getType() .. ")")
-
-    -- Check if node contains formatted text with #table#
-    if node.getType() == "formattedtext" then
+    if node.getType and node.getType() == "formattedtext" then
         local currentText = node.getValue()
-        local s, e = string.find(currentText, "<p>#table#</p>")
-        if s then
-            ChatManager.SystemMessage(indent .. "Debug: Found #table# in node -> " .. node.getName())
+        if currentText and string.find(currentText, PLACEHOLDER_PATTERN) then
             cFormattedText = node
             return true
         end
     end
 
-    -- Recursively search all child nodes
-    for name, child in pairs(node.getChildren()) do
-        if searchAndReplaceTablePlaceholder(child, depth + 1) then
-            return true
+    if node.getChildren then
+        for _, child in pairs(node.getChildren()) do
+            if searchAndReplaceTablePlaceholder(child, (depth + 1)) then
+                return true
+            end
         end
     end
 
     return false
 end
 
-
-------------------------------------------------------------------
--- Function: parseCSVLine
--- Purpose: Parses a single line of CSV text into individual cells.
--- Parameters:
---  line - The line of text to parse.
---  sep  - The delimiter (default is a comma).
--- Returns:
---  A table of cell values from the line.
-------------------------------------------------------------------
-local function parseCSVLine(line, sep)
-    local result = {}
-    sep = sep or "," -- Default delimiter is a comma
-    local pattern = string.format("([^%s]+)", sep) -- Pattern for splitting
-    for value in string.gmatch(line, pattern) do
-        table.insert(result, value) -- Add each value to the result table
-    end
-    return result
-end
-
 ------------------------------------------------------------------
 -- Function: createTableFromCSV
--- Purpose: Converts CSV text into an HTML table string.
--- Parameters:
---  csvText - The raw CSV text.
--- Returns:
---  A string representing an HTML table.
+-- Purpose : Converts CSV text into an HTML table string.
+-- Notes   : Uses Fantasy Grounds' Utility.decodeCSV for robust parsing.
 ------------------------------------------------------------------
 local function createTableFromCSV(csvText)
-    local rows = {}
-    for line in string.gmatch(csvText, "([^\n]*)\n?") do
-        local row = parseCSVLine(line)
-        table.insert(rows, row)
-    end
+    local tContents = Utility.decodeCSV(csvText) or {}
 
-    -- Build the HTML table string
     local tableText = "<table>"
-    for _, row in ipairs(rows) do
+    for _, row in ipairs(tContents) do
         tableText = tableText .. "<tr>"
         for _, cell in ipairs(row) do
             tableText = tableText .. "<td>" .. escapeXML(cell) .. "</td>"
@@ -136,55 +111,15 @@ local function createTableFromCSV(csvText)
 end
 
 ------------------------------------------------------------------
--- Robust XML escaper for Fantasy Grounds formattedtext.
--- Normalizes common Unicode/legacy/mojibake chars to numeric entities,
--- then escapes XML-reserved chars, avoiding double-escape via a sentinel.
+-- Function: escapeXML (minimal + robust)
+-- Purpose : Escape XML chars, and normalize common Unicode/mojibake chars:
+--           • bullets, ’ ‘ smart apostrophes, – — dashes.
+-- Order   : 1) Escape XML-reserved chars
+--           2) Map problem characters to numeric entities
+-- Rationale: Escaping first avoids double-escaping entities we create.
 ------------------------------------------------------------------
 local function escapeXML(value)
     if not value then return "" end
-    local SENT = "\1"  -- sentinel to protect entities we create
-
-    -- 0) Normalize BEFORE escaping '&'
-    -- Bullets
-    value = value
-        :gsub("\226\128\162", SENT .. "#8226;")                  -- UTF-8 bullet (•)
-        :gsub("â€¢",          SENT .. "#8226;")                  -- mojibake bullet
-        :gsub("\149",         SENT .. "#8226;")                  -- CP1252 bullet
-        :gsub("\194\183",     SENT .. "#8226;")                  -- UTF-8 middle dot → bullet (optional)
-        :gsub("\183",         SENT .. "#8226;")                  -- CP1252 middle dot → bullet (optional)
-
-    -- Smart apostrophes / single quotes
-    value = value
-        :gsub("\226\128\153", SENT .. "#8217;")                  -- UTF-8 ’ (U+2019)
-        :gsub("\226\128\152", SENT .. "#8216;")                  -- UTF-8 ‘ (U+2018)
-        :gsub("â€™",          SENT .. "#8217;")                  -- mojibake ’
-        :gsub("â€˜",          SENT .. "#8216;")                  -- mojibake ‘
-        :gsub("\146",         SENT .. "#8217;")                  -- CP1252 ’
-        :gsub("\145",         SENT .. "#8216;")                  -- CP1252 ‘
-
-    -- En dash / Em dash
-    value = value
-        :gsub("\226\128\147", SENT .. "#8211;")                  -- UTF-8 – (U+2013)
-        :gsub("\226\128\148", SENT .. "#8212;")                  -- UTF-8 — (U+2014)
-        :gsub("â€“",          SENT .. "#8211;")                  -- mojibake –
-        :gsub("â€”",          SENT .. "#8212;")                  -- mojibake —
-        :gsub("\150",         SENT .. "#8211;")                  -- CP1252 –
-        :gsub("\151",         SENT .. "#8212;")                  -- CP1252 —
-
-        -- Double quotes “ ” (U+201C/U+201D)
-    value = value
-        :gsub("\226\128\156", SENT .. "#8220;")   -- UTF-8 “
-        :gsub("\226\128\157", SENT .. "#8221;")   -- UTF-8 ”
-        :gsub("â€œ",          SENT .. "#8220;")   -- mojibake “
-        :gsub("â€\157",       SENT .. "#8221;")   -- mojibake ”
-        :gsub("\147",         SENT .. "#8220;")   -- CP1252 “
-        :gsub("\148",         SENT .. "#8221;")   -- CP1252 ”
-
-    -- (Optional niceties you can uncomment if helpful)
-    -- Ellipsis …
-    -- value = value:gsub("\226\128\166", SENT .. "#8230;"):gsub("â€¦", SENT .. "#8230;"):gsub("\133", SENT .. "#8230;")
-    -- Non-breaking space → regular space
-    -- value = value:gsub("\194\160", " "):gsub("\160", " ")
 
     -- 1) Escape XML-reserved characters
     value = value:gsub("&", "&#38;")
@@ -195,18 +130,67 @@ local function escapeXML(value)
                  :gsub("%%", "&#37;")
                  :gsub("%+", "&#43;")
 
-    -- 2) Restore our protected numeric entities (=> &#NNNN;)
-    value = value:gsub(SENT .. "(#%d+;)", "&%1")
+    -- 2) Normalize “problem” characters to numeric entities
+
+    -- Bullets
+    value = value
+        :gsub("•",   "&#8226;")  -- UTF-8 bullet (U+2022)
+        :gsub("â€¢", "&#8226;")  -- Excel mojibake bullet
+        :gsub("\149","&#8226;")  -- CP1252 bullet (0x95)
+
+    -- Smart apostrophes / single quotes
+    value = value
+        :gsub("’",   "&#8217;")  -- U+2019
+        :gsub("‘",   "&#8216;")  -- U+2018
+        :gsub("â€™","&#8217;")  -- mojibake ’
+        :gsub("â€˜","&#8216;")  -- mojibake ‘
+        :gsub("\146","&#8217;") -- CP1252 ’ (0x92)
+        :gsub("\145","&#8216;") -- CP1252 ‘ (0x91)
+
+    -- Dashes
+    value = value
+        :gsub("–",   "&#8211;")  -- en dash U+2013
+        :gsub("—",   "&#8212;")  -- em dash U+2014
+        :gsub("â€“","&#8211;")  -- mojibake –
+        :gsub("â€”","&#8212;")  -- mojibake —
+        :gsub("\150","&#8211;") -- CP1252 – (0x96)
+        :gsub("\151","&#8212;") -- CP1252 — (0x97)
 
     return value
 end
 
 ------------------------------------------------------------------
+-- Helper: replacePlaceholderOnce
+-- Purpose: Replace the FIRST paragraph that contains exactly "#table#"
+--          (ignoring surrounding spaces and NBSP) with the provided table HTML.
+-- Notes  : Uses function replacement to avoid '%' issues in replacement text.
+------------------------------------------------------------------
+local function replacePlaceholderOnce(html, tableHTML)
+    local replaced = false
+
+    local function trimInner(s)
+        -- Convert NBSP (U+00A0) to regular space, then trim
+        s = s:gsub("\194\160", " ")
+        return (s:gsub("^%s*(.-)%s*$", "%1"))
+    end
+
+    local function repl(attr, inner)
+        if (not replaced) and trimInner(inner) == "#table#" then
+            replaced = true
+            return tableHTML
+        end
+        return "<p" .. attr .. ">" .. inner .. "</p>"
+    end
+
+    -- Match <p ...> ... </p> in a tolerant, case-insensitive way
+    local new = html:gsub("<[Pp]([^>]*)>(.-)</[Pp]>", repl)
+    return new, (replaced and 1 or 0)
+end
+
+------------------------------------------------------------------
 -- Function: onImportCSV
--- Purpose: Replaces the #table# placeholder with the formatted 
---          table in the current formatted text field.
--- Parameters:
---  csvText - The raw CSV text.
+-- Purpose : Replaces the #table# placeholder with the formatted table
+--           in the current formatted text field (paste/string path).
 ------------------------------------------------------------------
 function onImportCSV(csvText)
     if not cFormattedText then
@@ -216,17 +200,20 @@ function onImportCSV(csvText)
 
     local tableText = createTableFromCSV(csvText)
     local currentText = cFormattedText.getValue()
-    local newText = string.gsub(currentText, "<p>#table#</p>", tableText, 1)
-    cFormattedText.setValue(newText)
-    ChatManager.SystemMessage("CSV imported successfully!")
+
+    -- Tolerant, verified replacement
+    local newText, count = replacePlaceholderOnce(currentText, tableText)
+    if count > 0 then
+        cFormattedText.setValue(newText)
+        ChatManager.SystemMessage("CSV imported successfully! (1 placeholder replaced)")
+    else
+        ChatManager.SystemMessage("Placeholder not found or not in a standalone paragraph.")
+    end
 end
 
 ------------------------------------------------------------------
 -- Function: onCSVFileSelection
--- Purpose: Reads the selected CSV file and processes it.
--- Parameters:
---  result - The result of the file selection dialog.
---  sPath  - The path to the selected file.
+-- Purpose : Reads the selected CSV file and processes it (file path path).
 ------------------------------------------------------------------
 function onCSVFileSelection(result, sPath)
     if result ~= "ok" then return end
@@ -253,18 +240,17 @@ function onCSVFileSelection(result, sPath)
     end
     sTable = sTable .. "</table>"
 
-    if cFormattedText then
-        local sValue = cFormattedText.getValue()
-        local success, newValue = pcall(function()
-            return string.gsub(sValue, "<p>#table#</p>", sTable, 1)
-        end)
-        if success then
-            cFormattedText.setValue(newValue)
-            ChatManager.SystemMessage("CSV imported successfully!")
-        else
-            ChatManager.SystemMessage("Error: Failed to replace placeholder.")
-        end
-    else
+    if not cFormattedText then
         ChatManager.SystemMessage("No formatted text field with #table# found.")
+        return
+    end
+
+    local sValue = cFormattedText.getValue()
+    local newValue, count = replacePlaceholderOnce(sValue, sTable)
+    if count > 0 then
+        cFormattedText.setValue(newValue)
+        ChatManager.SystemMessage("CSV imported successfully! (1 placeholder replaced)")
+    else
+        ChatManager.SystemMessage("Placeholder not found or not in a standalone paragraph.")
     end
 end
