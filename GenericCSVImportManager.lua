@@ -3,12 +3,14 @@
 -- Purpose: Replace the #table# placeholder with the text in your CSV
 --          file in text fields with a formatted HTML table.
 -- Notes:
---   * escapeXML handles bullets/quotes/dashes (incl. Excel mojibake).
---   * Placeholder match is tolerant: <p ...>#table#</p> (+ whitespace/NBSP).
---   * Replacement success is verified before announcing "imported".
+--   * Scans the DB before each import to find the current #table#.
+--   * Placeholder match tolerant: <p ...>#table#</p> (+ whitespace/NBSP).
+--   * Verifies replacement before announcing success.
+--   * escapeXML handles • ’ ‘ – — (including Excel mojibake).
+--   * Uses Utility.decodeCSV for robust CSV parsing.
 ------------------------------------------------------------------
 
--- Global variable to store the last formatted text field/control
+-- Global variable to store the last formatted text field/control (updated at scan time)
 local cFormattedText = nil
 
 -- Tolerant pattern for the #table# paragraph (case-insensitive <p>, attrs allowed,
@@ -88,6 +90,36 @@ function searchAndReplaceTablePlaceholder(node, depth)
     end
 
     return false
+end
+
+------------------------------------------------------------------
+-- Helper: findPlaceholderNode
+-- Purpose: Re-scan DB and set cFormattedText to a node containing #table#.
+--          Called right before each import to follow you as you move around.
+------------------------------------------------------------------
+local function findPlaceholderNode()
+    cFormattedText = nil
+    local root = DB.getRoot()
+    if not root then return nil end
+
+    local function search(node)
+        if node.getType and node.getType() == "formattedtext" then
+            local v = node.getValue()
+            if v and v:find("#table#", 1, true) then
+                cFormattedText = node
+                return true
+            end
+        end
+        if node.getChildren then
+            for _, child in pairs(node.getChildren()) do
+                if search(child) then return true end
+            end
+        end
+        return false
+    end
+
+    search(root)
+    return cFormattedText
 end
 
 ------------------------------------------------------------------
@@ -191,20 +223,23 @@ end
 -- Function: onImportCSV
 -- Purpose : Replaces the #table# placeholder with the formatted table
 --           in the current formatted text field (paste/string path).
+-- Notes   : Re-scans the DB *now* to locate the current #table#.
 ------------------------------------------------------------------
 function onImportCSV(csvText)
-    if not cFormattedText then
+    -- Always re-scan to follow the user's current location
+    local target = findPlaceholderNode()
+    if not target then
         ChatManager.SystemMessage("No #table# placeholder found in the current window.")
         return
     end
 
     local tableText = createTableFromCSV(csvText)
-    local currentText = cFormattedText.getValue()
+    local currentText = target.getValue()
 
     -- Tolerant, verified replacement
     local newText, count = replacePlaceholderOnce(currentText, tableText)
     if count > 0 then
-        cFormattedText.setValue(newText)
+        target.setValue(newText)
         ChatManager.SystemMessage("CSV imported successfully! (1 placeholder replaced)")
     else
         ChatManager.SystemMessage("Placeholder not found or not in a standalone paragraph.")
@@ -213,7 +248,8 @@ end
 
 ------------------------------------------------------------------
 -- Function: onCSVFileSelection
--- Purpose : Reads the selected CSV file and processes it (file path path).
+-- Purpose : Reads the selected CSV file and processes it (file picker path).
+-- Notes   : Re-scans the DB *now* to locate the current #table#.
 ------------------------------------------------------------------
 function onCSVFileSelection(result, sPath)
     if result ~= "ok" then return end
@@ -240,15 +276,17 @@ function onCSVFileSelection(result, sPath)
     end
     sTable = sTable .. "</table>"
 
-    if not cFormattedText then
+    -- Always re-scan before replacing
+    local target = findPlaceholderNode()
+    if not target then
         ChatManager.SystemMessage("No formatted text field with #table# found.")
         return
     end
 
-    local sValue = cFormattedText.getValue()
+    local sValue = target.getValue()
     local newValue, count = replacePlaceholderOnce(sValue, sTable)
     if count > 0 then
-        cFormattedText.setValue(newValue)
+        target.setValue(newValue)
         ChatManager.SystemMessage("CSV imported successfully! (1 placeholder replaced)")
     else
         ChatManager.SystemMessage("Placeholder not found or not in a standalone paragraph.")
